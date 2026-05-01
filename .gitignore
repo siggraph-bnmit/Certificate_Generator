@@ -1,0 +1,8 @@
+.env
+backend/sent_log.csv
+backend/output/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
