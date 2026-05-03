@@ -15,10 +15,18 @@ def _open_csv(path: str):
     raise ValueError(f"Cannot decode {path} as UTF-8 or latin-1.")
 
 
+def get_field(row: dict, field: str) -> str:
+    """Case-insensitive field lookup. Returns empty string if not found."""
+    for k, v in row.items():
+        if k.lower() == field.lower():
+            return v
+    return ""
+
+
 def parse(csv_path: str) -> tuple[list[dict], list[str]]:
     """
     Returns (valid_rows, errors).
-    valid_rows: list of dicts with at least 'name' and 'email' keys.
+    valid_rows: list of dicts with original column-name casing preserved.
     errors: list of human-readable strings describing skipped rows.
     """
     encoding = _open_csv(csv_path)
@@ -39,10 +47,11 @@ def parse(csv_path: str) -> tuple[list[dict], list[str]]:
             raise ValueError("CSV is missing required column: 'email'.")
 
         for i, row in enumerate(reader, start=2):
-            cleaned = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+            # Preserve original case for column names — used as PPTX placeholders
+            cleaned = {k.strip(): v.strip() for k, v in row.items() if k}
 
-            name = cleaned.get("name", "")
-            email = cleaned.get("email", "")
+            name = get_field(cleaned, "name")
+            email = get_field(cleaned, "email")
 
             if not name:
                 errors.append(f"Row {i}: skipped — 'name' is empty.")

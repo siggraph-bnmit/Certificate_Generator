@@ -1,1 +1,3 @@
 python-dotenv
+python-pptx
+pywin32

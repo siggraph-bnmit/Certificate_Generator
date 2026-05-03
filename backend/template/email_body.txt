@@ -1,0 +1,8 @@
+Hi {name},
+
+Congratulations! Please find your certificate of participation attached.
+
+It was a pleasure having you at SIGGRAPH 2025. We hope you had a great experience and look forward to seeing you at future events.
+
+Best regards,
+The SIGGRAPH 2025 Team

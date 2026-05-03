@@ -1,6 +1,8 @@
 # Certificate Email Sender
 
-Sends personalised HTML emails to a list of participants from a CSV file via Gmail SMTP. No paid services. No frontend. Runs entirely from the command line.
+Sends personalised emails to a list of participants from a CSV file via Gmail SMTP.
+Supports two modes: **HTML email** and **PDF certificate attachment**.
+No paid services. No frontend. Runs entirely from the command line.
 
 ---
 
@@ -8,30 +10,25 @@ Sends personalised HTML emails to a list of participants from a CSV file via Gma
 
 ```
 certificate_generator/
-├── .env                          ← your credentials (never commit this)
-├── .env.example                  ← copy this to create .env
+├── .env                             
+├── .env.example                      ← copy this to create .env
 ├── .gitignore
 ├── README.md
 └── backend/
-    ├── run.py                    ← entry point — run this
-    ├── csv_parser.py             ← reads and validates the CSV
-    ├── mailer.py                 ← Gmail SMTP + HTML rendering
-    ├── log_manager.py            ← tracks sent/failed in sent_log.csv
+    ├── run.py                        
+    ├── csv_parser.py                 
+    ├── mailer.py                     
+    ├── certificate_generator.py     
+    ├── log_manager.py               
     ├── requirements.txt
-    ├── sent_log.csv              ← auto-created on first run
+    ├── sent_log.csv                  
+    ├── output/                      
     └── template/
-        └── email_template.html  ← your HTML email (place it here manually)
+        ├── email_template.html      
+        ├── email_body.txt            
+        └── certificate.pptx         
 ```
 
----
-
-## Prerequisites
-
-- Python 3.11 or higher
-- A Gmail account with **2-Factor Authentication** enabled
-- A Gmail **App Password** (16 characters) — not your regular Gmail password
-
----
 
 ## Gmail App Password Setup
 
@@ -59,58 +56,99 @@ Copy `.env.example` to `.env` at the project root and fill in your values:
 GMAIL_ADDRESS=yourname@gmail.com
 GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 CSV_FILE_PATH=C:/path/to/your/participants.csv
-```
-
-Optional variables (have sensible defaults):
-
-```
-SEND_DELAY_SECONDS=1.5
-DEFAULT_SUBJECT=Your Certificate of Participation
+MODE=html
 ```
 
 **Step 3 — Prepare your CSV file**
 
-The CSV must have at least these two columns (case-insensitive, any order):
+The CSV must have at least these two columns (validated case-insensitively, any order):
 
 | Column | Required | Description |
 |--------|----------|-------------|
-| `name` | Yes | Participant's name — used in the email |
+| `name` | Yes | Participant's name |
 | `email` | Yes | Recipient's email address |
 
-Any additional columns (e.g. `role`, `event`, `date`) are optional and can be used as placeholders in the HTML template.
+Any additional columns are optional. Their exact names (case-sensitive) become
+available as placeholders in both the HTML template and the PPTX slide.
 
 Example:
 
 ```csv
-name,email,role
+Name,Email,Role
 Alice Smith,alice@example.com,Speaker
 Bob Jones,bob@example.com,Attendee
 ```
 
 Both UTF-8 and latin-1 encoded CSVs are supported automatically.
 
-**Step 4 — Prepare your HTML template**
+---
 
-Place your HTML file at:
+## Mode 1 — HTML Email (`MODE=html`)
 
-```
-backend/template/email_template.html
-```
+**How it works:** Sends a fully-rendered HTML email. The subject is read from the
+`<title>` tag of your HTML file. Each email also includes an auto-generated
+plain-text fallback for better deliverability.
 
-- The **email subject** is read from the `<title>` tag of the HTML file.
-- Use `{name}` anywhere in the HTML to insert the participant's name.
-- Any other CSV column is also available as a placeholder using the same `{column_name}` syntax.
+**Template location:** `backend/template/email_template.html`
 
-Example placeholders:
+A sample template is already provided. Replace it with your own design.
+
+**Placeholders in the HTML** use single curly braces, lowercase:
 
 ```html
 <title>Your Certificate of Participation</title>
-...
+
 <p>Dear {name},</p>
 <p>Thank you for joining as a {role}.</p>
 ```
 
-A sample template is already provided at `backend/template/email_template.html` to use as a starting point.
+> Placeholder names are always lowercase regardless of CSV column casing.
+> So `{name}` works whether your CSV column is `name`, `Name`, or `NAME`.
+
+**`.env` settings for this mode:**
+
+```
+MODE=html
+```
+
+---
+
+## Mode 2 — PDF Attachment (`MODE=attachment`)
+
+**How it works:**
+1. Opens your PPTX template in PowerPoint.
+2. Replaces `{{ColumnName}}` placeholders with each participant's CSV values.
+3. Exports the slide to PDF.
+4. Sends the PDF as an email attachment with a plain-text body.
+5. Deletes the local PDF after sending.
+
+**PPTX template design:**
+- Design your certificate slide in PowerPoint normally.
+- Wherever you want the participant's name to appear, type `{{Name}}` exactly.
+- Any other CSV column can be used the same way: `{{Role}}`, `{{Email}}`, etc.
+- Placeholder names are **case-sensitive** — `{{Name}}` only matches a CSV
+  column literally named `Name`.
+- Set the path to your PPTX file in `.env` as `PPTX_TEMPLATE_PATH`.
+
+**Email body:** Edit `backend/template/email_body.txt` with the message to send
+alongside the attachment. Supports `{name}` substitution (always lowercase):
+
+```
+Hi {name},
+
+Please find your certificate of participation attached.
+
+Best regards,
+The SIGGRAPH 2025 Team
+```
+
+**`.env` settings for this mode:**
+
+```
+MODE=attachment
+PPTX_TEMPLATE_PATH=C:/path/to/certificate_template.pptx
+ATTACHMENT_SUBJECT=Your Certificate of Participation — SIGGRAPH 2025
+```
 
 ---
 
@@ -121,41 +159,43 @@ cd backend
 python run.py
 ```
 
-Progress is printed to the terminal:
 
-```
-[INFO] Loading CSV: C:/path/to/participants.csv
-[INFO] 42 valid participant(s) found.
-[INFO] Subject: Your Certificate of Participation
-[INFO] Connecting to Gmail SMTP…
-[INFO] Starting send batch (42 emails)…
+---
 
-  OK  [1/42] Alice Smith <alice@example.com>
-  OK  [2/42] Bob Jones <bob@example.com>
- FAIL [3/42] Carol White <carol@example.com>  —  SMTPException: ...
+## Email Priority Flag
 
-[DONE] Sent: 41  |  Failed: 1  |  Total: 42
-[INFO] Failed entries are recorded in backend/sent_log.csv
-[INFO] Re-run the same command to retry only failed participants.
-```
+All emails (both modes) are sent with high-importance headers:
+
+| Header | Value |
+|--------|-------|
+| `X-Priority` | `1` |
+| `X-MSMail-Priority` | `High` |
+| `Importance` | `High` |
+
+This marks the email with the high-priority flag (red `!`) in Gmail and Outlook.
+
+> Note: Priority headers improve visibility but do not guarantee inbox delivery.
+> Gmail spam filters evaluate sender reputation and content, not just headers.
 
 ---
 
 ## Resuming an Interrupted Run
 
-If the process stops mid-batch (crash, network drop, manual stop), just re-run the same command:
+If the process stops mid-batch (crash, network drop, manual stop), re-run the
+same command:
 
 ```bash
 python run.py
 ```
 
-The script reads `backend/sent_log.csv` on startup and skips every participant already marked as `sent`. It will only attempt the remaining ones — no duplicates.
+The script reads `backend/sent_log.csv` on startup and skips every participant
+already marked as `sent`. Only the remaining ones are attempted — no duplicates.
 
 ---
 
 ## Send Log
 
-`backend/sent_log.csv` is created automatically on the first run. It records every send attempt:
+`backend/sent_log.csv` is created automatically on the first run:
 
 ```
 email,name,status,timestamp,error
@@ -163,19 +203,24 @@ alice@example.com,Alice Smith,sent,2025-05-01T10:32:11,
 carol@example.com,Carol White,failed,2025-05-01T10:32:15,SMTPException: ...
 ```
 
-To reset the log and re-send to everyone (e.g. for a fresh batch):
+To reset the log and re-send to everyone:
 
 - Delete `backend/sent_log.csv`, or
-- Clear its contents — the file will be recreated with headers on the next run
+- Clear its contents — it will be recreated with headers on the next run
 
 ---
 
-## How the Email is Built
+## All `.env` Variables
 
-Each email is sent as a `multipart/alternative` MIME message with two parts:
-
-1. **Plain text** — auto-generated by stripping HTML tags from the template (improves deliverability, renders in clients that block HTML)
-2. **HTML** — your full template with placeholders substituted
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GMAIL_ADDRESS` | Yes | — | Gmail address to send from |
+| `GMAIL_APP_PASSWORD` | Yes | — | 16-character Gmail App Password |
+| `CSV_FILE_PATH` | Yes | — | Absolute path to your CSV file |
+| `MODE` | Yes | `html` | `html` or `attachment` |
+| `PPTX_TEMPLATE_PATH` | Attachment mode | — | Absolute path to your PPTX template |
+| `ATTACHMENT_SUBJECT` | Attachment mode | `Your Certificate of Participation` | Email subject |
+| `SEND_DELAY_SECONDS` | No | `1.5` | Seconds between sends |
+| `DEFAULT_SUBJECT` | No | `Your Certificate` | Fallback if HTML `<title>` tag is missing |
 
 ---
-
