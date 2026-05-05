@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import smtplib
+import ssl
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
@@ -148,6 +149,19 @@ def send_with_attachment(
     smtp.sendmail(sender, recipient_email, msg.as_string())
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """
+    Builds an SSL context using certifi's CA bundle.
+    Fixes [Errno 2] No such file or directory on Microsoft Store Python,
+    which cannot locate the system CA store from its sandboxed environment.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 def open_smtp_connection() -> smtplib.SMTP:
     address = os.getenv("GMAIL_ADDRESS")
     password = os.getenv("GMAIL_APP_PASSWORD")
@@ -157,7 +171,7 @@ def open_smtp_connection() -> smtplib.SMTP:
         )
     smtp = smtplib.SMTP("smtp.gmail.com", 587)
     smtp.ehlo()
-    smtp.starttls()
+    smtp.starttls(context=_ssl_context())
     smtp.login(address, password)
     return smtp
 
