@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import csv
 import re
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _open_csv(path: str):
+def _open_csv(path: str) -> str:
     for encoding in ("utf-8", "latin-1"):
         try:
             with open(path, newline="", encoding=encoding) as f:
@@ -23,15 +25,18 @@ def get_field(row: dict, field: str) -> str:
     return ""
 
 
-def parse(csv_path: str) -> tuple[list[dict], list[str]]:
+def stream(csv_path: str, *, _errors: list | None = None):
     """
-    Returns (valid_rows, errors).
-    valid_rows: list of dicts with original column-name casing preserved.
-    errors: list of human-readable strings describing skipped rows.
+    Generator that yields one valid row dict at a time.
+
+    Column-name casing is preserved exactly as in the CSV header — required
+    for PPTX {{Placeholder}} matching which is case-sensitive.
+
+    Invalid rows (empty name/email, bad email format) are skipped.
+    If _errors list is supplied, error messages are appended there instead
+    of being printed — used by parse() for backward compatibility.
     """
     encoding = _open_csv(csv_path)
-    valid_rows: list[dict] = []
-    errors: list[str] = []
 
     with open(csv_path, newline="", encoding=encoding) as f:
         reader = csv.DictReader(f)
@@ -47,22 +52,40 @@ def parse(csv_path: str) -> tuple[list[dict], list[str]]:
             raise ValueError("CSV is missing required column: 'email'.")
 
         for i, row in enumerate(reader, start=2):
-            # Preserve original case for column names — used as PPTX placeholders
             cleaned = {k.strip(): v.strip() for k, v in row.items() if k}
 
-            name = get_field(cleaned, "name")
+            name  = get_field(cleaned, "name")
             email = get_field(cleaned, "email")
 
+            def _skip(msg: str):
+                if _errors is not None:
+                    _errors.append(msg)
+                else:
+                    print(f"[WARN] {msg}")
+
             if not name:
-                errors.append(f"Row {i}: skipped — 'name' is empty.")
+                _skip(f"Row {i}: skipped — 'name' is empty.")
                 continue
             if not email:
-                errors.append(f"Row {i}: skipped — 'email' is empty.")
+                _skip(f"Row {i}: skipped — 'email' is empty.")
                 continue
             if not EMAIL_RE.match(email):
-                errors.append(f"Row {i}: skipped — invalid email '{email}'.")
+                _skip(f"Row {i}: skipped — invalid email '{email}'.")
                 continue
 
-            valid_rows.append(cleaned)
+            yield cleaned
 
-    return valid_rows, errors
+
+def count_valid(csv_path: str) -> int:
+    """Returns the number of valid rows without loading them all into memory."""
+    return sum(1 for _ in stream(csv_path))
+
+
+def parse(csv_path: str) -> tuple[list[dict], list[str]]:
+    """
+    Backward-compatible loader. Returns (valid_rows, errors).
+    Internally uses stream() — no duplicate parsing logic.
+    """
+    errors: list[str] = []
+    rows = list(stream(csv_path, _errors=errors))
+    return rows, errors

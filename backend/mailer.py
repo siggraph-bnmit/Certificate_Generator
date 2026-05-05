@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import os
 import smtplib
 from email import encoders
 from email.mime.base import MIMEBase
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html.parser import HTMLParser
@@ -71,6 +74,47 @@ def send(
     smtp.sendmail(sender, recipient_email, msg.as_string())
 
 
+def send_with_inline_image(
+    smtp: smtplib.SMTP,
+    sender: str,
+    recipient_email: str,
+    subject: str,
+    html_body: str,
+    image_bytes: bytes,
+    cid: str = "qrcode",
+):
+    """QR mode — sends HTML email with an image embedded via Content-ID (CID).
+
+    Gmail and all major clients render CID images correctly.
+    data: URIs are stripped by Gmail and must not be used.
+
+    MIME structure:
+      multipart/related
+        ├── multipart/alternative
+        │   ├── text/plain
+        │   └── text/html  (<img src="cid:{cid}">)
+        └── image/png  (Content-ID: <{cid}>)
+    """
+    outer = MIMEMultipart("related")
+    outer["From"] = sender
+    outer["To"] = recipient_email
+    outer["Subject"] = subject
+    _apply_priority_headers(outer)
+
+    alt = MIMEMultipart("alternative")
+    plain = html_to_plaintext(html_body)
+    alt.attach(MIMEText(plain, "plain", "utf-8"))
+    alt.attach(MIMEText(html_body, "html", "utf-8"))
+    outer.attach(alt)
+
+    img_part = MIMEImage(image_bytes)
+    img_part.add_header("Content-ID", f"<{cid}>")
+    img_part.add_header("Content-Disposition", "inline")
+    outer.attach(img_part)
+
+    smtp.sendmail(sender, recipient_email, outer.as_string())
+
+
 def send_with_attachment(
     smtp: smtplib.SMTP,
     sender: str,
@@ -132,4 +176,4 @@ def ensure_connected(smtp: smtplib.SMTP) -> smtplib.SMTP:
         return open_smtp_connection()
 
 
-SEND_DELAY = float(os.getenv("SEND_DELAY_SECONDS", "1.5"))
+SEND_DELAY = float(os.getenv("SEND_DELAY_SECONDS", "0.6"))

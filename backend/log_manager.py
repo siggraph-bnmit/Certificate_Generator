@@ -12,13 +12,13 @@ def _ensure_log():
             csv.writer(f).writerow(HEADERS)
 
 
-def already_sent() -> set[str]:
-    """Returns set of emails that were successfully sent in a previous run."""
+def already_sent(status: str = "sent") -> set[str]:
+    """Returns set of emails whose last recorded status matches `status`."""
     _ensure_log()
     sent = set()
     with open(LOG_PATH, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row.get("status") == "sent":
+            if row.get("status") == status:
                 sent.add(row["email"].strip().lower())
     return sent
 

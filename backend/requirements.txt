@@ -1,3 +1,6 @@
 python-dotenv
 python-pptx
-pywin32
+pywin32; sys_platform == "win32"
+qrcode[pil]
+fastapi
+uvicorn[standard]

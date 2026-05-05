@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SIGGRAPH 2025 — Entry Scanner</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f0f1a;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+
+    h1 { font-size: 20px; letter-spacing: 1px; color: #a0a8c0; margin-bottom: 4px; }
+    h2 { font-size: 14px; color: #555; font-weight: normal; margin-bottom: 24px; }
+
+    #camera-wrap {
+      position: relative;
+      width: 320px;
+      height: 320px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 2px solid #2a2a4a;
+    }
+
+    video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    canvas { display: none; }
+
+    /* Scanning overlay frame */
+    #camera-wrap::after {
+      content: '';
+      position: absolute;
+      inset: 30px;
+      border: 2px solid rgba(100, 120, 255, 0.5);
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    /* Flash overlay */
+    #flash {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 0.1s;
+      border-radius: 12px;
+      pointer-events: none;
+    }
+
+    /* Result banner */
+    #result {
+      margin-top: 20px;
+      width: 320px;
+      padding: 16px 20px;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: bold;
+      text-align: center;
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      background: #1a1a2e;
+      color: #555;
+    }
+
+    #result.ok       { background: #1a3a1a; color: #4caf50; border: 1px solid #4caf50; }
+    #result.already  { background: #3a3a1a; color: #ffc107; border: 1px solid #ffc107; }
+    #result.invalid  { background: #3a1a1a; color: #f44336; border: 1px solid #f44336; }
+
+    /* Stats */
+    #stats {
+      margin-top: 16px;
+      width: 320px;
+      display: flex;
+      gap: 10px;
+    }
+
+    .stat {
+      flex: 1;
+      background: #1a1a2e;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    .stat-value { font-size: 28px; font-weight: bold; }
+    .stat-label { font-size: 11px; color: #666; margin-top: 2px; }
+    .stat.attended .stat-value { color: #4caf50; }
+    .stat.total    .stat-value { color: #a0a8c0; }
+    .stat.absent   .stat-value { color: #f44336; }
+
+    /* Recent scans */
+    #log-title { margin-top: 20px; font-size: 12px; color: #444; align-self: flex-start; margin-left: calc(50% - 160px); }
+
+    #log {
+      margin-top: 6px;
+      width: 320px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .log-entry {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      font-size: 13px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .log-entry.ok      { background: #1a3a1a; }
+    .log-entry.already { background: #3a3a1a; }
+    .log-entry.invalid { background: #3a1a1a; }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .ok .dot      { background: #4caf50; }
+    .already .dot { background: #ffc107; }
+    .invalid .dot { background: #f44336; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+  </style>
+</head>
+<body>
+
+  <h1>SIGGRAPH 2025</h1>
+  <h2>Entry Scanner</h2>
+
+  <div id="camera-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div id="flash"></div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <div id="result">Point camera at a participant's QR code</div>
+
+  <div id="stats">
+    <div class="stat attended"><div class="stat-value" id="stat-attended">—</div><div class="stat-label">Attended</div></div>
+    <div class="stat total">  <div class="stat-value" id="stat-total">—</div>   <div class="stat-label">Total</div></div>
+    <div class="stat absent"> <div class="stat-value" id="stat-absent">—</div>  <div class="stat-label">Absent</div></div>
+  </div>
+
+  <div id="log-title">Recent scans</div>
+  <div id="log"></div>
+
+  <script>
+    const video   = document.getElementById("video");
+    const canvas  = document.getElementById("canvas");
+    const ctx     = canvas.getContext("2d");
+    const result  = document.getElementById("result");
+    const flash   = document.getElementById("flash");
+    const log     = document.getElementById("log");
+
+    // Debounce: ignore same QR data within this window (ms)
+    const DEBOUNCE_MS = 3000;
+    let lastScanned = {};
+
+    // -----------------------------------------------------------------------
+    // Camera
+    // -----------------------------------------------------------------------
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+      .then(stream => { video.srcObject = stream; requestAnimationFrame(scan); })
+      .catch(() => {
+        result.textContent = "Camera access denied. Check browser permissions.";
+        result.className = "invalid";
+      });
+
+    // -----------------------------------------------------------------------
+    // Scan loop
+    // -----------------------------------------------------------------------
+    function scan() {
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+        if (code) {
+          const now = Date.now();
+          const raw = code.data;
+          if (!lastScanned[raw] || now - lastScanned[raw] > DEBOUNCE_MS) {
+            lastScanned[raw] = now;
+            processQR(raw);
+          }
+        }
+      }
+      requestAnimationFrame(scan);
+    }
+
+    // -----------------------------------------------------------------------
+    // Process scanned QR
+    // -----------------------------------------------------------------------
+    async function processQR(raw) {
+      try {
+        const resp = await fetch("/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: raw }),
+        });
+        const data = await resp.json();
+        showResult(data);
+        addLogEntry(data);
+        refreshStats();
+      } catch (e) {
+        showResult({ status: "invalid", message: "Server error — is the server running?" });
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // UI feedback
+    // -----------------------------------------------------------------------
+    function showResult(data) {
+      result.className = data.status;
+
+      if (data.status === "ok") {
+        result.textContent = "✓  " + data.message;
+        flashScreen("#4caf5066");
+        beep(880, 120);
+      } else if (data.status === "already") {
+        result.textContent = "⚠  Already marked: " + data.message;
+        flashScreen("#ffc10744");
+        beep(440, 80);
+      } else {
+        result.textContent = "✗  " + data.message;
+        flashScreen("#f4433644");
+        beep(220, 200);
+      }
+    }
+
+    function addLogEntry(data) {
+      const entry = document.createElement("div");
+      entry.className = "log-entry " + data.status;
+
+      const icon = data.status === "ok" ? "✓" : data.status === "already" ? "⚠" : "✗";
+      const time = new Date().toLocaleTimeString();
+      entry.innerHTML = `<span class="dot"></span><span>${icon} ${data.message}</span><span style="margin-left:auto;color:#444;font-size:11px">${time}</span>`;
+
+      log.prepend(entry);
+
+      // Keep log to last 30 entries
+      while (log.children.length > 30) log.removeChild(log.lastChild);
+    }
+
+    async function refreshStats() {
+      try {
+        const data = await (await fetch("/stats")).json();
+        document.getElementById("stat-attended").textContent = data.attended;
+        document.getElementById("stat-total").textContent    = data.total;
+        document.getElementById("stat-absent").textContent   = data.absent;
+      } catch (_) {}
+    }
+
+    function flashScreen(color) {
+      flash.style.background = color;
+      flash.style.opacity = "1";
+      setTimeout(() => { flash.style.opacity = "0"; }, 150);
+    }
+
+    // Web Audio API beep — no external sound files needed
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function beep(freq, duration) {
+      const osc  = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration / 1000);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration / 1000);
+    }
+
+    // Initial stats load
+    refreshStats();
+  </script>
+</body>
+</html>
