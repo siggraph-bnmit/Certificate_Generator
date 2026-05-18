@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: certificate-generator-api
+    runtime: python
+    rootDir: backend
+
+    # LibreOffice is required for MODE=attachment (PPTX → PDF on Linux).
+    # Full install takes ~5 min on first deploy; subsequent deploys are cached.
+    buildCommand: apt-get update && apt-get install -y libreoffice && pip install -r requirements.txt
+
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+
+    envVars:
+      # ---- Required: set these in Render dashboard (never commit values) ----
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: QR_SECRET_KEY
+        sync: false
+      - key: FRONTEND_URL          # Your Vercel deployment URL — enables CORS
+        sync: false
+      - key: SUPABASE_URL          # From Supabase project settings
+        sync: false
+      - key: SUPABASE_SERVICE_KEY  # Service role key (not anon key)
+        sync: false
+
+      # ---- Optional: attachment mode ----
+      - key: PPTX_TEMPLATE_PATH   # Path to .pptx inside the deployed repo
+        sync: false
+      - key: ATTACHMENT_SUBJECT
+        value: "Your Certificate of Participation — SIGGRAPH 2025"
+
+      # ---- Optional: defaults ----
+      - key: SUPABASE_CSV_BUCKET
+        value: scanner-csv
+      - key: SEND_DELAY_SECONDS
+        value: "0.6"
+      - key: DEFAULT_SUBJECT
+        value: "Your Certificate"

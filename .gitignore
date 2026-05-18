@@ -1,9 +1,23 @@
+# Environment
 .env
-backend/sent_log.csv
-backend/output/
+.env.local
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 venv/
 .venv/
+
+# Backend generated files
+backend/sent_log.csv
+backend/output/
+backend/scanner_csv_cache.csv
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# IDE
 .vscode/

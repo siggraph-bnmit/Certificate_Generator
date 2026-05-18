@@ -17,6 +17,8 @@ Caller is responsible for deleting the returned PDF after sending.
 import hashlib
 import os
 import re
+import subprocess
+import sys
 import time
 
 def _replace_in_paragraph(paragraph, replacements: dict):
@@ -58,12 +60,12 @@ def _apply_replacements(template_path: str, output_path: str, replacements: dict
 _PP_SAVE_AS_PDF = 32  # ppSaveAsPDF constant
 
 
-def _convert_to_pdf(pptx_path: str, pdf_path: str):
+def _convert_to_pdf_win32(pptx_path: str, pdf_path: str):
     import pythoncom
     import win32com.client
 
     abs_pptx = os.path.abspath(pptx_path)
-    abs_pdf = os.path.abspath(pdf_path)
+    abs_pdf  = os.path.abspath(pdf_path)
 
     pythoncom.CoInitialize()
     powerpoint = win32com.client.Dispatch("PowerPoint.Application")
@@ -78,8 +80,35 @@ def _convert_to_pdf(pptx_path: str, pdf_path: str):
             presentation.Close()
         powerpoint.Quit()
         pythoncom.CoUninitialize()
-        # Give Windows time to release the file handle before the caller deletes the temp PPTX
+        # Give Windows time to release the file handle before deleting the temp PPTX
         time.sleep(0.8)
+
+
+def _convert_to_pdf_libreoffice(pptx_path: str, pdf_path: str):
+    abs_pptx = os.path.abspath(pptx_path)
+    out_dir  = os.path.dirname(abs_pptx)
+
+    result = subprocess.run(
+        ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", out_dir, abs_pptx],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"LibreOffice conversion failed: {result.stderr.strip()}")
+
+    # LibreOffice outputs {stem}.pdf alongside the input file — rename to expected path
+    lo_output = os.path.join(out_dir, os.path.splitext(os.path.basename(abs_pptx))[0] + ".pdf")
+    abs_pdf   = os.path.abspath(pdf_path)
+    if lo_output != abs_pdf:
+        os.replace(lo_output, abs_pdf)
+
+
+def _convert_to_pdf(pptx_path: str, pdf_path: str):
+    if sys.platform == "win32":
+        _convert_to_pdf_win32(pptx_path, pdf_path)
+    else:
+        _convert_to_pdf_libreoffice(pptx_path, pdf_path)
 
 
 def _delete_retry(path: str, retries: int = 6, delay: float = 0.5):

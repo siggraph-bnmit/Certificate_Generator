@@ -5,3 +5,5 @@ qrcode[pil]
 fastapi
 uvicorn[standard]
 certifi
+python-multipart
+supabase
