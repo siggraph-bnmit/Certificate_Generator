@@ -47,11 +47,9 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Certificate Generator API", version="1.0.0")
 
-_raw_origins = os.getenv("FRONTEND_URL", "*")
-_allowed_origins = ["*"] if _raw_origins == "*" else [o.strip() for o in _raw_origins.split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
