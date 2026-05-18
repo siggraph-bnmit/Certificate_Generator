@@ -156,10 +156,11 @@ async def _on_startup():
 
 class _Job:
     def __init__(self):
-        self.status = "idle"   # idle | running | done | error
-        self.sent   = 0
-        self.failed = 0
-        self.total  = 0
+        self.status     = "idle"   # idle | running | done | error
+        self.sent       = 0
+        self.failed     = 0
+        self.total      = 0
+        self.started_at = 0.0
         self._q: queue.Queue = queue.Queue()
 
     def emit(self, type_: str, message: str, **kw):
@@ -171,6 +172,7 @@ class _Job:
 
 _current_job: _Job = _Job()
 _job_lock = threading.Lock()
+_JOB_TIMEOUT = 30 * 60  # auto-reset after 30 min — guards against crashed threads
 
 # ---------------------------------------------------------------------------
 # Retry helper (mirrors run.py)
@@ -249,14 +251,26 @@ async def validate_csv(file: UploadFile = File(...)):
 # Send job
 # ---------------------------------------------------------------------------
 
+@app.post("/api/reset-job")
+def reset_job():
+    global _current_job
+    with _job_lock:
+        _current_job = _Job()
+    return {"status": "reset"}
+
+
 @app.post("/api/send")
 async def start_send(mode: str = Form("html")):
     global _current_job
     with _job_lock:
+        # Auto-reset if job has been "running" for longer than the timeout
         if _current_job.status == "running":
-            raise HTTPException(status_code=409, detail="A send job is already running.")
+            elapsed = time.time() - _current_job.started_at
+            if elapsed < _JOB_TIMEOUT:
+                raise HTTPException(status_code=409, detail="A send job is already running.")
         job = _Job()
         job.status = "running"
+        job.started_at = time.time()
         _current_job = job
 
     def run():

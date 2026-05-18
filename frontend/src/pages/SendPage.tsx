@@ -7,6 +7,8 @@ import {
   validateCsv,
 } from '../lib/api'
 
+const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+
 type CsvInfo = { total: number; columns: string[] }
 
 const MODES = [
@@ -29,6 +31,7 @@ export default function SendPage() {
   const [mode,       setMode]       = useState('html')
   const [log,        setLog]        = useState<ProgressEvent[]>([])
   const [running,    setRunning]    = useState(false)
+  const [stuck,      setStuck]      = useState(false)
   const [summary,    setSummary]    = useState<DoneSummary | null>(null)
   const [uploadErr,  setUploadErr]  = useState<string | null>(null)
   const [uploading,  setUploading]  = useState(false)
@@ -59,16 +62,26 @@ export default function SendPage() {
     if (file) handleFile(file)
   }
 
+  const handleReset = async () => {
+    await fetch(`${BASE}/api/reset-job`, { method: 'POST' })
+    setStuck(false)
+    setRunning(false)
+    setLog([])
+  }
+
   const handleSend = async () => {
     if (!csvInfo || running) return
     setLog([])
     setSummary(null)
+    setStuck(false)
     setRunning(true)
 
     try {
       await startSend(mode)
     } catch (e: unknown) {
-      addLog({ type: 'error', message: e instanceof Error ? e.message : 'Start failed' })
+      const msg = e instanceof Error ? e.message : 'Start failed'
+      addLog({ type: 'error', message: msg })
+      if (msg.includes('already running')) setStuck(true)
       setRunning(false)
       return
     }
@@ -139,14 +152,28 @@ export default function SendPage() {
         </div>
       </div>
 
-      {/* Send button */}
-      <button
-        onClick={handleSend}
-        disabled={!csvInfo || running}
-        className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-      >
-        {running ? 'Sending…' : 'Start Send'}
-      </button>
+      {/* Send button + stuck reset */}
+      <div className="space-y-2">
+        <button
+          onClick={handleSend}
+          disabled={!csvInfo || running}
+          className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {running ? 'Sending…' : 'Start Send'}
+        </button>
+
+        {stuck && (
+          <div className="flex items-center gap-3 bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 text-sm">
+            <span className="text-yellow-800 flex-1">A previous job is stuck. Reset it to start a new one.</span>
+            <button
+              onClick={handleReset}
+              className="px-3 py-1.5 bg-yellow-600 text-white rounded-lg text-xs font-medium hover:bg-yellow-700 transition-colors"
+            >
+              Reset job
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Live log */}
       {log.length > 0 && (
