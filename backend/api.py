@@ -80,35 +80,61 @@ def _get_supabase():
     return _supabase_client
 
 
-def _push_csv_to_supabase(local_path: str):
+def _supabase_upload(key: str, data: bytes):
+    """Upload bytes to Supabase Storage, overwriting if exists."""
     sb = _get_supabase()
     if not sb:
         return
-    with open(local_path, "rb") as f:
-        data = f.read()
     bucket = sb.storage.from_(_SUPABASE_BUCKET)
     try:
-        bucket.upload("scanner.csv", data)
+        bucket.upload(key, data)
     except Exception:
         try:
-            bucket.update("scanner.csv", data)
+            bucket.update(key, data)
         except Exception:
-            pass  # non-fatal — local cache is still up to date
+            pass
+
+
+def _supabase_download(key: str) -> bytes | None:
+    """Download bytes from Supabase Storage. Returns None on failure."""
+    sb = _get_supabase()
+    if not sb:
+        return None
+    try:
+        data = sb.storage.from_(_SUPABASE_BUCKET).download(key)
+        return data if data else None
+    except Exception:
+        return None
+
+
+def _push_csv_to_supabase(local_path: str):
+    with open(local_path, "rb") as f:
+        _supabase_upload("scanner.csv", f.read())
 
 
 def _pull_csv_from_supabase() -> bool:
-    sb = _get_supabase()
-    if not sb:
-        return False
-    try:
-        data: bytes = sb.storage.from_(_SUPABASE_BUCKET).download("scanner.csv")
-        if data:
-            with open(_CSV_CACHE_PATH, "wb") as f:
-                f.write(data)
-            return True
-    except Exception:
-        pass
+    data = _supabase_download("scanner.csv")
+    if data:
+        with open(_CSV_CACHE_PATH, "wb") as f:
+            f.write(data)
+        return True
     return False
+
+
+def _upload_send_csv(content: bytes):
+    """Store the send CSV in Supabase so any container can access it."""
+    _supabase_upload("send.csv", content)
+
+
+def _download_send_csv() -> str | None:
+    """Download send.csv from Supabase into a temp file. Returns path or None."""
+    data = _supabase_download("send.csv")
+    if not data:
+        return None
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+    tmp.write(data)
+    tmp.close()
+    return tmp.name
 
 
 def _get_scan_csv_path() -> str | None:
@@ -191,29 +217,32 @@ def get_config():
 
 @app.post("/api/validate-csv")
 async def validate_csv(file: UploadFile = File(...)):
+    content = await file.read()
+    # Validate using a short-lived temp file
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
     try:
-        shutil.copyfileobj(file.file, tmp)
+        tmp.write(content)
         tmp.close()
         rows, errors = csv_parser.parse(tmp.name)
         if errors:
-            os.unlink(tmp.name)
             raise HTTPException(status_code=422, detail="; ".join(errors))
+        # Store validated CSV in Supabase — any container can retrieve it for the send job
+        _upload_send_csv(content)
         columns = list(rows[0].keys()) if rows else []
         return {
-            "tmp_path": tmp.name,
-            "total":    len(rows),
-            "columns":  columns,
-            "preview":  rows[:5],
+            "total":   len(rows),
+            "columns": columns,
+            "preview": rows[:5],
         }
     except HTTPException:
         raise
     except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    finally:
         try:
             os.unlink(tmp.name)
         except OSError:
             pass
-        raise HTTPException(status_code=422, detail=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +250,7 @@ async def validate_csv(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/send")
-async def start_send(csv_tmp_path: str = Form(...), mode: str = Form("html")):
+async def start_send(mode: str = Form("html")):
     global _current_job
     with _job_lock:
         if _current_job.status == "running":
@@ -232,7 +261,7 @@ async def start_send(csv_tmp_path: str = Form(...), mode: str = Form("html")):
 
     def run():
         try:
-            _execute_send(job, csv_tmp_path, mode)
+            _execute_send(job, mode)
         except Exception as e:
             job.emit("error", f"Fatal: {e}")
         finally:
@@ -388,70 +417,79 @@ def get_stats():
 # Core send execution (runs in background thread)
 # ---------------------------------------------------------------------------
 
-def _execute_send(job: _Job, csv_path: str, mode: str):
+def _execute_send(job: _Job, mode: str):
     sender = os.getenv("GMAIL_ADDRESS")
     if not sender:
         job.emit("error", "GMAIL_ADDRESS not set in server environment.")
         return
 
-    already_done = log_manager.already_sent("qr_sent" if mode == "qr" else "sent")
-    attended_set = None
-    if mode in ("html", "attachment") and attendance.has_tracking_columns(csv_path):
-        attended_set = attendance.get_attended_emails(csv_path)
-
-    remaining = 0
-    try:
-        for row in csv_parser.stream(csv_path):
-            email = csv_parser.get_field(row, "email").lower()
-            if attended_set is not None and email not in attended_set:
-                continue
-            if email in already_done:
-                continue
-            remaining += 1
-    except Exception as e:
-        job.emit("error", f"CSV error: {e}")
-        return
-
-    job.total = remaining
-    job.emit("info", f"Starting {mode} batch — {remaining} email(s) to send.")
-
-    if remaining == 0:
-        job.emit("info", "Nothing to send (all already processed).")
-        return
-
-    def make_stream():
-        for row in csv_parser.stream(csv_path):
-            email = csv_parser.get_field(row, "email").lower()
-            if attended_set is not None and email not in attended_set:
-                continue
-            if email in already_done:
-                continue
-            yield row
-
-    try:
-        smtp = mailer.open_smtp_connection()
-        job.emit("info", "Connected to Gmail SMTP.")
-    except Exception as e:
-        job.emit("error", f"SMTP connection failed: {e}")
+    # Download CSV from Supabase into a short-lived temp file
+    job.emit("info", "Fetching CSV from Supabase…")
+    csv_path = _download_send_csv()
+    if not csv_path:
+        job.emit("error", "No CSV found in Supabase. Upload a CSV first.")
         return
 
     try:
-        if mode == "html":
-            _html_loop(job, make_stream, smtp, sender)
-        elif mode == "qr":
-            _qr_loop(job, make_stream, csv_path, smtp, sender)
-        elif mode == "attachment":
-            _attachment_loop(job, make_stream, smtp, sender)
-        else:
-            job.emit("error", f"Unknown mode: {mode}")
+        already_done = log_manager.already_sent("qr_sent" if mode == "qr" else "sent")
+        attended_set = None
+        if mode in ("html", "attachment") and attendance.has_tracking_columns(csv_path):
+            attended_set = attendance.get_attended_emails(csv_path)
+
+        remaining = 0
+        try:
+            for row in csv_parser.stream(csv_path):
+                email = csv_parser.get_field(row, "email").lower()
+                if attended_set is not None and email not in attended_set:
+                    continue
+                if email in already_done:
+                    continue
+                remaining += 1
+        except Exception as e:
+            job.emit("error", f"CSV error: {e}")
+            return
+
+        job.total = remaining
+        job.emit("info", f"Starting {mode} batch — {remaining} email(s) to send.")
+
+        if remaining == 0:
+            job.emit("info", "Nothing to send (all already processed).")
+            return
+
+        def make_stream():
+            for row in csv_parser.stream(csv_path):
+                email = csv_parser.get_field(row, "email").lower()
+                if attended_set is not None and email not in attended_set:
+                    continue
+                if email in already_done:
+                    continue
+                yield row
+
+        try:
+            smtp = mailer.open_smtp_connection()
+            job.emit("info", "Connected to Gmail SMTP.")
+        except Exception as e:
+            job.emit("error", f"SMTP connection failed: {e}")
+            return
+
+        try:
+            if mode == "html":
+                _html_loop(job, make_stream, smtp, sender)
+            elif mode == "qr":
+                _qr_loop(job, make_stream, csv_path, smtp, sender)
+            elif mode == "attachment":
+                _attachment_loop(job, make_stream, smtp, sender)
+            else:
+                job.emit("error", f"Unknown mode: {mode}")
+        finally:
+            try:
+                smtp.quit()
+            except Exception:
+                pass
     finally:
+        # Always clean up the temp CSV downloaded from Supabase
         try:
-            smtp.quit()
-        except Exception:
-            pass
-        try:
-            if csv_path.startswith(tempfile.gettempdir()):
-                os.unlink(csv_path)
+            os.unlink(csv_path)
         except OSError:
             pass
 

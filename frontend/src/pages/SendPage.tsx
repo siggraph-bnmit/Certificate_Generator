@@ -7,7 +7,7 @@ import {
   validateCsv,
 } from '../lib/api'
 
-type CsvInfo = { tmp_path: string; total: number; columns: string[] }
+type CsvInfo = { total: number; columns: string[] }
 
 const MODES = [
   { value: 'html',       label: 'HTML Email',    desc: 'Personalised HTML email' },
@@ -66,7 +66,7 @@ export default function SendPage() {
     setRunning(true)
 
     try {
-      await startSend(csvInfo.tmp_path, mode)
+      await startSend(mode)
     } catch (e: unknown) {
       addLog({ type: 'error', message: e instanceof Error ? e.message : 'Start failed' })
       setRunning(false)

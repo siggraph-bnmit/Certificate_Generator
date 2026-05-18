@@ -21,9 +21,8 @@ export async function validateCsv(file: File) {
   return fetchJson('/api/validate-csv', { method: 'POST', body: form })
 }
 
-export async function startSend(csvTmpPath: string, mode: string) {
+export async function startSend(mode: string) {
   const form = new FormData()
-  form.append('csv_tmp_path', csvTmpPath)
   form.append('mode', mode)
   return fetchJson('/api/send', { method: 'POST', body: form })
 }
