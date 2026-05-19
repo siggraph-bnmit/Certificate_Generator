@@ -218,7 +218,6 @@ python run.py
 | `ATTACHMENT_SUBJECT` | `attachment` only | `Your Certificate of Participation` | Email subject |
 | `QR_SECRET_KEY` | `qr` + `scan` | — | secret — must be identical in both modes |
 | `SEND_DELAY_SECONDS` | No | `0.6` | Seconds between sends (Gmail limit: ~100/min) |
-| `DEFAULT_SUBJECT` | No | `Your Certificate` | Fallback if HTML `<title>` tag is missing |
 
 ---
 
