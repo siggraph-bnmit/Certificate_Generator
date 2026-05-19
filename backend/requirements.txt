@@ -4,9 +4,6 @@ pywin32; sys_platform == "win32"
 qrcode[pil]
 fastapi
 uvicorn[standard]
-<<<<<<< HEAD
 certifi
-python-multipart
-supabase
-=======
->>>>>>> parent of d6c9403 (fix SMTP auth)
+
+
